@@ -1,0 +1,242 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["httpx"]
+# ///
+
+"""
+Figma Desktop CLI - interact with Figma via its local MCP server.
+
+Usage:
+  figma design-context [--node-id=ID] [--raw]
+  figma screenshot [--node-id=ID] [--output=FILE]
+  figma variables [--node-id=ID]
+  figma metadata [--node-id=ID]
+"""
+
+import sys
+import json
+import re
+import httpx
+
+MCP_URL = "http://127.0.0.1:3845/mcp"
+HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+}
+
+
+def parse_sse_response(text: str) -> dict:
+    """Parse SSE response to extract JSON data."""
+    for line in text.split("\n"):
+        if line.startswith("data: "):
+            return json.loads(line[6:])
+    raise Exception(f"Could not parse SSE response: {text[:500]}")
+
+
+def clean_design_context_output(text: str) -> str:
+    """Remove boilerplate/instruction text from MCP response."""
+    patterns = [
+        # Remove "SUPER CRITICAL:" block to end of text or double newline
+        r'SUPER CRITICAL:.*',
+        # Remove node-id explanation
+        r'Node ids have been added[^\n]*\n?',
+        # Remove design tokens line
+        r'These styles are contained in the design:[^\n]*\n?',
+        # Remove image asset instructions
+        r'Image assets are stored on a localhost[^\n]*\n?',
+        # Remove "IMPORTANT: After you call this tool" instruction
+        r'IMPORTANT: After you call this tool[^\n]*\n?',
+    ]
+
+    result = text
+    for pattern in patterns:
+        result = re.sub(pattern, '', result, flags=re.DOTALL)
+
+    # Clean up extra whitespace
+    result = re.sub(r'\n{3,}', '\n\n', result)
+    return result.strip()
+
+
+class MCPClient:
+    """Client for Figma's MCP server."""
+
+    def __init__(self):
+        self.session_id: str | None = None
+        self.client = httpx.Client(timeout=120)
+
+    def _request(self, method: str, params: dict, request_id: int = 1) -> dict:
+        """Send an MCP JSON-RPC request."""
+        payload = {
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": params,
+            "id": request_id,
+        }
+
+        headers = HEADERS.copy()
+        if self.session_id:
+            headers["mcp-session-id"] = self.session_id
+
+        resp = self.client.post(MCP_URL, json=payload, headers=headers)
+        resp.raise_for_status()
+
+        # Extract session ID from response headers if present
+        if "mcp-session-id" in resp.headers:
+            self.session_id = resp.headers["mcp-session-id"]
+
+        data = parse_sse_response(resp.text)
+        if "result" in data:
+            return data["result"]
+        elif "error" in data:
+            raise Exception(f"MCP Error: {data['error']}")
+
+        raise Exception("No valid response")
+
+    def initialize(self):
+        """Initialize MCP session."""
+        return self._request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "figma-cli", "version": "1.0"},
+        })
+
+    def call_tool(self, tool_name: str, arguments: dict) -> dict:
+        """Call an MCP tool."""
+        # Ensure we have a session
+        if not self.session_id:
+            self.initialize()
+
+        return self._request("tools/call", {
+            "name": tool_name,
+            "arguments": arguments,
+        }, request_id=2)
+
+    def close(self):
+        self.client.close()
+
+
+def get_design_context(node_id: str | None = None, raw: bool = False) -> str:
+    """Get React+Tailwind code for a node."""
+    client = MCPClient()
+    try:
+        args = {}
+        if node_id:
+            args["nodeId"] = node_id
+
+        result = client.call_tool("get_design_context", args)
+
+        if raw:
+            return json.dumps(result, indent=2)
+
+        # Extract text content from result
+        if "content" in result:
+            texts = [c.get("text", "") for c in result["content"] if c.get("type") == "text"]
+            return clean_design_context_output("\n".join(texts))
+        return json.dumps(result, indent=2)
+    finally:
+        client.close()
+
+
+def get_screenshot(node_id: str | None = None) -> bytes:
+    """Get screenshot of a node."""
+    client = MCPClient()
+    try:
+        args = {}
+        if node_id:
+            args["nodeId"] = node_id
+
+        result = client.call_tool("get_screenshot", args)
+
+        # Extract image data from result
+        if "content" in result:
+            for c in result["content"]:
+                if c.get("type") == "image":
+                    import base64
+                    return base64.b64decode(c.get("data", ""))
+        return b""
+    finally:
+        client.close()
+
+
+def get_variables(node_id: str | None = None) -> str:
+    """Get design tokens for a node."""
+    client = MCPClient()
+    try:
+        args = {}
+        if node_id:
+            args["nodeId"] = node_id
+
+        result = client.call_tool("get_variable_defs", args)
+
+        if "content" in result:
+            texts = [c.get("text", "") for c in result["content"] if c.get("type") == "text"]
+            return "\n".join(texts)
+        return json.dumps(result, indent=2)
+    finally:
+        client.close()
+
+
+def get_metadata(node_id: str | None = None) -> str:
+    """Get XML structure of a node."""
+    client = MCPClient()
+    try:
+        args = {}
+        if node_id:
+            args["nodeId"] = node_id
+
+        result = client.call_tool("get_metadata", args)
+
+        if "content" in result:
+            texts = [c.get("text", "") for c in result["content"] if c.get("type") == "text"]
+            return "\n".join(texts)
+        return json.dumps(result, indent=2)
+    finally:
+        client.close()
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+
+    cmd = sys.argv[1]
+    node_id = None
+    raw = False
+    output = None
+
+    for arg in sys.argv[2:]:
+        if arg.startswith("--node-id="):
+            node_id = arg.split("=", 1)[1]
+        elif arg == "--raw":
+            raw = True
+        elif arg.startswith("--output="):
+            output = arg.split("=", 1)[1]
+
+    try:
+        if cmd == "design-context":
+            print(get_design_context(node_id, raw))
+        elif cmd == "screenshot":
+            data = get_screenshot(node_id)
+            if not data:
+                print("Error: No image data returned", file=sys.stderr)
+                sys.exit(1)
+            filename = output or f"figma-screenshot-{node_id or 'selected'}.png"
+            with open(filename, "wb") as f:
+                f.write(data)
+            print(f"Saved: {filename}")
+        elif cmd == "variables":
+            print(get_variables(node_id))
+        elif cmd == "metadata":
+            print(get_metadata(node_id))
+        else:
+            print(f"Unknown command: {cmd}")
+            print(__doc__)
+            sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
