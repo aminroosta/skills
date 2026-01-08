@@ -193,13 +193,12 @@ rg -n "dovetail|tongue|groove|connector" references/BOSL2.wiki
 
 ## Iteration Tips
 
-1. **Start simple** - Get basic geometry right before adding details
-2. **Screenshot early** - Visual check is faster than full render
-3. **Use `$fn`** - Low values (12-24) for preview, high (64-128) for final
-4. **Test connectors** - Print small test coupons before full parts
-5. **Name parts clearly** - `box_top`, `box_bottom`, `box_latch`
-6. **Many angles for connectors** - Take screenshots from multiple angles (including orthographic 0:0, 90:0) when designing clips, tabs, or joints to catch orientation errors early
-7. **Exploded view for debugging** - Use an exploded assembly view to quickly verify connector alignment and positioning before rendering STLs
+- **Start simple** - Get basic geometry right before adding details
+- **Screenshot early** - Visual check is faster than full render
+- **Lots of Screenshots at once** - Use a bash for loop to take multiple screenshots to see the full picture.
+- **Use `$fn`** - Low values (12-24) for preview, high (64-128) for final
+- **Many angles for connectors** - Take screenshots from multiple angles (including orthographic 0:0, 90:0) when designing clips, tabs, or joints to catch orientation errors early
+- **Exploded view for debugging** - Use an exploded assembly view to quickly verify connector alignment and positioning
 
 ## Example: Two-Part Box with Dovetail
 
@@ -235,3 +234,5 @@ cuboid([60, 40, 8], rounding=2, except=BOTTOM)
     attach(LEFT, CENTER, outside=true)
         dovetail("male", width=12, height=8, slide=6, slope=6);
 ```
+
+The scripts and references are either in `~/.codex/skills/scad/` or `~/.claude/skills/scad/`.
