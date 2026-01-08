@@ -198,6 +198,8 @@ rg -n "dovetail|tongue|groove|connector" references/BOSL2.wiki
 3. **Use `$fn`** - Low values (12-24) for preview, high (64-128) for final
 4. **Test connectors** - Print small test coupons before full parts
 5. **Name parts clearly** - `box_top`, `box_bottom`, `box_latch`
+6. **Many angles for connectors** - Take screenshots from multiple angles (including orthographic 0:0, 90:0) when designing clips, tabs, or joints to catch orientation errors early
+7. **Exploded view for debugging** - Use an exploded assembly view to quickly verify connector alignment and positioning before rendering STLs
 
 ## Example: Two-Part Box with Dovetail
 
